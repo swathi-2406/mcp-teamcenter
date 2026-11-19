@@ -75,7 +75,12 @@ async def relay(tool: str, args: dict[str, Any]) -> Any:
         _waiting.pop(job_id, None)
     if not reply.get("ok"):
         raise RuntimeError(reply.get("error", "Agent reported an error."))
-    return reply.get("result")
+    result = reply.get("result")
+    # Return lists as ONE object. A bare list is sent as one content block per element,
+    # and some clients (e.g. Gemini) only read the first block.
+    if isinstance(result, list):
+        return {"count": len(result), "results": result}
+    return result
 
 
 @mcp.custom_route("/agent/next", methods=["GET"])
