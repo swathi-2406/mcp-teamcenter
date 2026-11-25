@@ -289,6 +289,54 @@ async def add_bom_line(parent_item_id: str, child_item_id: str, quantity: str = 
                                             child_revision_id=child_revision_id))
 
 
+def _find_item_id(result: Any) -> str:
+    """Pull the new item's ID out of a create_item answer, whatever its exact shape."""
+    if isinstance(result, dict):
+        for key in ("item_id", "itemId", "item_id_value"):
+            if isinstance(result.get(key), str) and result[key]:
+                return result[key]
+        for value in result.values():
+            found = _find_item_id(value)
+            if found:
+                return found
+    elif isinstance(result, list):
+        for value in result:
+            found = _find_item_id(value)
+            if found:
+                return found
+    return ""
+
+
+@mcp.tool()
+async def create_child_bom_line(parent_item_id: str, name: str, item_type: str = "Item",
+                                item_id: str = "", revision_id: str = "", description: str = "",
+                                quantity: str = "1", parent_revision_id: str = "") -> Any:
+    """Create a NEW item and add it as a child BOM line under a parent assembly, in one step.
+    Leave item_id empty to let Teamcenter assign it. Use add_bom_line instead if the child
+    item already exists. Always confirm parent, name, type, ID and quantity with the user first."""
+    created = await relay("create_item", dict(name=name, item_type=item_type, item_id=item_id,
+                                              revision_id=revision_id, description=description))
+    if isinstance(created, dict) and created.get("error"):
+        return {"error": f"Could not create the child item: {created['error']}"}
+    child_id = item_id or _find_item_id(created)
+    if not child_id:
+        return {"error": "The child item was created, but its item ID could not be read from the "
+                         "answer, so it was NOT added to the BOM. Add it with add_bom_line.",
+                "created": created}
+    try:
+        line = await relay("add_bom_line", dict(parent_item_id=parent_item_id, child_item_id=child_id,
+                                                quantity=quantity, parent_revision_id=parent_revision_id,
+                                                child_revision_id=revision_id))
+    except RuntimeError as e:
+        return {"error": f"Child item {child_id} was created but could not be added under "
+                         f"{parent_item_id}: {e}. Retry with add_bom_line.", "created": created}
+    if isinstance(line, dict) and line.get("error"):
+        return {"error": f"Child item {child_id} was created but could not be added under "
+                         f"{parent_item_id}: {line['error']}. Retry with add_bom_line.", "created": created}
+    return {"ok": True, "parent_item_id": parent_item_id, "child_item_id": child_id,
+            "quantity": quantity, "created": created, "bom_line": line}
+
+
 @mcp.tool()
 async def remove_bom_line(parent_item_id: str, child_item_id: str, parent_revision_id: str = "") -> Any:
     """Remove a child item from a parent assembly's BOM. Confirm with the user first."""
